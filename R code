@@ -1,0 +1,1514 @@
+##############################################
+###########Hill numbers#######################
+
+library(readr)
+EMF <- read.csv("EMF.csv",header = TRUE,row.names = 1)
+SAP <- read.csv("SAP.csv",header = TRUE,row.names = 1)
+PAT <- read.csv("PAT.csv",header = TRUE,row.names = 1)
+multitroph <- read.csv("MUL.csv",header = TRUE,row.names = 1)
+View(SAP)
+library(iNEXT)
+result_EMF <- iNEXT(EMF, q = c(0, 1, 2), datatype = "abundance")
+result_SAP <- iNEXT(SAP, q = c(0, 1, 2), datatype = "abundance")
+result_PAT <- iNEXT(PAT, q = c(0, 1, 2), datatype = "abundance")
+result_multitroph <- iNEXT(MUL, q = c(0, 1, 2), datatype = "abundance")
+View(result_EMF$AsyEst)
+write.csv(result_EMF$AsyEst,"result_EMF.csv", row.names = T)
+write.csv(result_SAP$AsyEst,"result_SAP.csv", row.names = T)
+write.csv(result_MUL$AsyEst,"result_MUL.csv", row.names = T)
+write.csv(result_PAT$AsyEst,"result_PAT.csv", row.names = T)
+
+
+##################################################################################
+##########N_P_concentrations#################################################
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(fmsb)
+library(RColorBrewer)
+
+data <- read.csv("NP.csv", header = TRUE, stringsAsFactors = FALSE)
+
+# Optional but HIGHLY recommended: trim whitespace
+data$Treatment <- trimws(data$Treatment)
+data$Harvest_time <- trimws(data$Harvest_time)
+
+# 1) Enforce order of Treatments (CORNERS)
+data$Treatment <- factor(
+  data$Treatment,
+  levels = c("Control","N_inorg","N_org","P_inorg","P_org","Soil")
+)
+
+# 2) Enforce order of Harvest Time (LINES)
+data$Harvest_time <- factor(data$Harvest_time, levels = c("T0","T1","T2"))
+
+prepare_radar_data <- function(df, value_col) {
+
+  df_summary <- df %>%
+    filter(!is.na(Treatment), !is.na(Harvest_time)) %>%
+    group_by(Treatment, Harvest_time) %>%
+    summarise(Mean_Value = mean(.data[[value_col]], na.rm = TRUE), .groups = "drop")
+
+  wide <- df_summary %>%
+    pivot_wider(names_from = Treatment, values_from = Mean_Value) %>%
+    arrange(Harvest_time) %>%
+    column_to_rownames("Harvest_time")
+
+  # Global limits
+  global_max <- max(wide, na.rm = TRUE) * 1.1
+  global_min <- 0
+
+  radar_df <- rbind(
+    rep(global_max, ncol(wide)),
+    rep(global_min, ncol(wide)),
+    wide
+  )
+
+  # helpful attributes
+  attr(radar_df, "global_max") <- global_max
+  return(radar_df)
+}
+
+radar_N <- prepare_radar_data(data, "N")
+radar_P <- prepare_radar_data(data, "P")
+
+n_groups <- nrow(radar_N) - 2  # should be 3 (T0/T1/T2)
+
+# line colors
+cols_line <- brewer.pal(max(3, min(8, n_groups)), "Dark2")[1:n_groups]
+cols_fill <- rep(NA, n_groups)  # transparent fill
+
+# close any open device safely (optional)
+try(dev.off(), silent = TRUE)
+
+layout(matrix(c(1, 2, 3), nrow = 1), widths = c(1, 1, 0.4))
+
+par(font = 2)  # bold
+
+# --- Plot 1: N ---
+par(mar = c(1, 1, 2, 1))
+radarchart(
+  radar_N,
+  axistype = 1,
+  pcol = cols_line,
+  pfcol = cols_fill,
+  plwd = 3,
+  plty = 1,
+  cglcol = "grey50",
+  cglty = 1,
+  cglwd = 0.8,
+  axislabcol = "black",
+  caxislabels = round(seq(0, attr(radar_N, "global_max"), length.out = 5), 1),
+  vlcex = 1.5,
+  calcex = 1.6,
+  title = "Nitrogen (N)"
+)
+
+# --- Plot 2: P ---
+par(mar = c(1, 1, 2, 1))
+radarchart(
+  radar_P,
+  axistype = 1,
+  pcol = cols_line,
+  pfcol = cols_fill,
+  plwd = 3,
+  plty = 1,
+  cglcol = "grey50",
+  cglty = 1,
+  cglwd = 0.8,
+  axislabcol = "black",
+  caxislabels = round(seq(0, attr(radar_P, "global_max"), length.out = 5), 1),
+  vlcex = 1.5,
+  calcex = 1.6,
+  title = "Phosphorus (P)"
+)
+
+# --- Legend ---
+plot.new()
+par(mar = c(0, 0, 0, 0))
+legend(
+  "center",
+  legend = rownames(radar_N)[-c(1, 2)],
+  col = cols_line,
+  lwd = 3,
+  pch = NA,          # <-- better: line-only legend (no dot)
+  lty = 1,
+  bty = "n",
+  cex = 1.5,
+  text.font = 2,
+  title = "Harvest Time"
+)
+par(font = 1)
+
+
+#############################################################################
+#############################Niche_differentiation#################################
+############################################################################
+###########EMF, SAP, PAT and MUL between treatments have the same methods, so just show one code (EMF in control group) here #######################################
+##########################################################################
+##############Normalized by resampling with replacement##########################
+library(readr)
+
+downsample.r <- function(vector, sequences, permutations = 1000) {
+  sample.matrix <- c()
+  for (i in seq_along(vector)) {
+    if (vector[i] != 0) {
+      j <- as.numeric(vector[i])
+      for (k in seq_len(j)) {
+        sample.matrix <- c(sample.matrix, vector[i])
+      }
+    }
+  }
+  sample.matrix <- names(sample.matrix)
+  richness <- numeric(permutations)
+  for (p in seq_len(permutations)) {
+    perm <- sample(sample.matrix, sequences, replace = TRUE)
+    richness[p] <- length(unique(perm))
+  }
+  mean(richness)
+}
+
+downsample <- function(vector, sequences, permutations = 1000) {
+  richness_est <- downsample.r(vector, sequences, permutations)
+  mrich        <- round(richness_est, 0)
+  shuffled    <- sort(sample(vector, length(vector), replace = FALSE),
+                      decreasing = TRUE)
+  selected    <- shuffled
+  adj_abund   <- selected / sum(selected) * sequences
+  adj_abund   <- adj_abund[sort(names(adj_abund))]
+  return(adj_abund)
+}
+
+######################
+##read the ASV table
+data <- read.csv("OTU.csv", row.names = 1, check.names = FALSE)
+n_ASV  <- nrow(data)
+n_samp <- ncol(data)
+stand_matrix <- matrix(
+  0,
+  nrow = n_ASV,
+  ncol = n_samp,
+  dimnames = list(rownames(data), colnames(data))
+)
+sequences    <- 2500  
+permutations <- 2000
+
+for (i in seq_len(n_samp)) {
+  vec <- data[, i]
+  names(vec) <- rownames(data)
+  if (all(vec == 0)) next
+  
+  ds <- downsample(vec, sequences, permutations)
+  idx <- match(names(ds), rownames(data))
+  stand_matrix[idx, i] <- ds
+  
+  cat(sprintf("Sample %s (%d/%d) done\n",
+              colnames(data)[i], i, n_samp))
+}
+
+stand_matrix2 <- stand_matrix[rowSums(stand_matrix) > 0, ]
+
+scaled <- t(stand_matrix2)
+
+write.csv(
+  scaled,
+  file    = "Scaled _OTU.csv",
+  row.names = TRUE,
+  quote     = FALSE)
+##Step1_calculate_niche#################################
+library(vegan)
+library(hypervolume)
+library(readr)
+# Load data containing EMF community data and meta data
+# meta data contains environmental data reflecting
+# different niche axes and biogeographic realm/biome
+# distinctions used during randomisation.
+
+meta_emf<-read.csv("meta_emf_con.csv",row.names=1)
+EMF <- read.csv("EMF_con.csv", row.names=1)
+EMF_raw <- read.csv("EMF_con_raw.csv", row.names=1)
+
+EMFra <- decostand(EMF, "total")
+EMFra5 <- EMFra[, colSums(decostand(EMFra, "pa")) > 4]
+
+# Distinguish different niche types and individual niche axes
+abcond <- meta_emf[, c("pH", "MAT", "MAP", "Ts_10_7d", "SM_10_7d", "Ts_10_30d", "SM_10_30d", "Annual_soil_temp_10", "Annual_soil_moisture_10")]
+abres <- meta_emf[, c("N", "Avail_P", "Ca", "Fe","K", "Mg", "Mn", "Na", "Mositure")]
+bicond <- meta_emf[, c("fungal_nmds1", "fungal_nmds2")]
+bires <- meta_emf$bires
+
+pH <- meta_emf$pH
+MAP <- meta_emf$MAP
+MAT <- meta_emf$MAT
+Ts_10_7d <- meta_emf$Ts_10_7d
+SM_10_7d <- meta_emf$SM_10_7d
+Ts_10_30d <- meta_emf$Ts_10_30d
+SM_10_30d <- meta_emf$SM_10_30d
+Annual_soil_temp_10 <- meta_emf$Annual_soil_temp_10
+Annual_soil_moisture_10 <- meta_emf$Annual_soil_moisture_10
+N <- meta_emf$N
+Avail_P <- meta_emf$Avail_P
+Ca <- meta_emf$Ca
+Fe <- meta_emf$Fe
+K <- meta_emf$K
+Mg <- meta_emf$Mg
+Mn <- meta_emf$Mn
+Na <- meta_emf$Na
+Mositure <- meta_emf$Mositure
+FU <- meta_emf[, c("fungal_nmds1", "fungal_nmds2")]
+
+
+abcond_orig <- abcond
+abres_orig <- abres
+bicond_orig <- bicond
+bires_orig <- bires
+
+# Scale the niche axes
+
+abcond <- prcomp(scale(abcond))$x
+abres <- prcomp(scale(abres))$x
+bicond <- prcomp(scale(bicond))$x
+bires <- prcomp(scale(bires))$x
+
+pH <- scale(pH)
+MAP <- scale(MAP)
+MAT <- scale(MAT)
+Ts_10_7d <- scale(Ts_10_7d)
+SM_10_7d <- scale(SM_10_7d)
+Ts_10_30d <- scale(Ts_10_30d)
+SM_10_30d <- scale(SM_10_30d)
+Annual_soil_temp_10 <- scale(Annual_soil_temp_10)
+Annual_soil_moisture_10 <- scale(Annual_soil_moisture_10)
+N <- scale(N)
+Avail_P <- scale(Avail_P)
+Ca <- scale(Ca)
+Fe <- scale(Fe)
+K <- scale(K)
+Mg <- scale(Mg)
+Mn <- scale(Mn)
+Na <- scale(Na)
+Mositure <- scale(Mositure)
+FU <- scale(FU)
+
+
+# Describe full niche space
+
+fullaxes <- prcomp(scale(cbind(abcond_orig, abres_orig, bicond_orig, bires_orig)))$x[, 1:7] # take first 7 axes = 81.7% of variance
+
+
+# Caluclate hypervolumes by combining niche space (full/types/axes)
+# with EM fungal presence and abundance data 
+
+# Prepare output to save niche estimates
+
+fullniches <- list()
+
+abcondniches <- list()
+abresniches <- list()
+bicondniches <- list()
+biresniches <- list()
+
+pHniches <- list()
+MAPniches <- list()
+MATniches <- list()
+Ts_10_7dniches <- list()
+SM_10_7dniches <- list()
+Ts_10_30dniches <- list()
+SM_10_30dniches <- list()
+Annual_soil_temp_10niches <- list()
+Annual_soil_moisture_10niches <- list()
+Nniches <- list()
+Avail_Pniches <- list()
+Caniches <- list()
+Feniches <- list()
+Kniches <- list()
+Mgniches <- list()
+Mnniches <- list()
+Naniches <- list()
+Mositureniches <- list()
+FUniches <- list()
+
+
+
+# Loop through all VT; calculate niche description using hypervolume::hypervolume_gaussian function
+# Takes several hours on laptop
+
+#set.seed(123)
+for (i in 1:ncol(EMFra5)){
+  ASVab <- EMFra5[, i]
+  faxsub <- fullaxes[ASVab > 0,]
+  
+  abcsub<-abcond[ASVab > 0,]
+  abrsub<-abres[ASVab > 0,]
+  bicsub<-bicond[ASVab > 0,]
+  birsub<-bires[ASVab > 0,]
+  
+  pHsub <- pH[ASVab > 0,]
+  MAPsub <- MAP[ASVab > 0,]
+  MATsub <- MAT[ASVab > 0,]
+  Ts_10_7dsub <- Ts_10_7d[ASVab > 0,]
+  SM_10_7dsub <- SM_10_7d[ASVab > 0,]
+  Ts_10_30dsub <- Ts_10_30d[ASVab > 0,]
+  SM_10_30dsub <- SM_10_30d[ASVab > 0,]
+  Annual_soil_temp_10sub <- Annual_soil_temp_10[ASVab > 0,]
+  Annual_soil_moisture_10sub <- Annual_soil_moisture_10[ASVab > 0,]
+  Nsub <- N[ASVab > 0,]
+  Avail_Psub <- Avail_P[ASVab > 0,]
+  Casub <- Ca[ASVab > 0,]
+  Fesub <- Fe[ASVab > 0,]
+  Ksub <- K[ASVab > 0,]
+  Mgsub <- Mg[ASVab > 0,]
+  Mnsub <- Mn[ASVab > 0,]
+  Nasub <- Na[ASVab > 0,]
+  Mosituresub <- Mositure[ASVab > 0,]
+  FUsub <- FU[ASVab > 0,]
+  
+  wtssub<-ASVab[ASVab > 0]
+  
+  fullniches[[i]] <- hypervolume_gaussian(faxsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  
+  abcondniches[[i]] <- hypervolume_gaussian(abcsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  abresniches[[i]] <- hypervolume_gaussian(abrsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  bicondniches[[i]] <- hypervolume_gaussian(bicsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  biresniches[[i]] <- hypervolume_gaussian(birsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  
+  pHniches[[i]] <- hypervolume_gaussian(pHsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  MAPniches[[i]] <- hypervolume_gaussian(MAPsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  MATniches[[i]] <- hypervolume_gaussian(MATsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Ts_10_7dniches[[i]] <- hypervolume_gaussian(Ts_10_7dsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  SM_10_7dniches[[i]] <- hypervolume_gaussian(SM_10_7dsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Ts_10_30dniches[[i]] <- hypervolume_gaussian(Ts_10_30dsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  SM_10_30dniches[[i]] <- hypervolume_gaussian(SM_10_30dsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Annual_soil_temp_10niches[[i]] <- hypervolume_gaussian(Annual_soil_temp_10sub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Annual_soil_moisture_10niches[[i]] <- hypervolume_gaussian(Annual_soil_moisture_10sub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Nniches[[i]] <- hypervolume_gaussian(Nsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Avail_Pniches[[i]] <- hypervolume_gaussian(Avail_Psub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Caniches[[i]] <- hypervolume_gaussian(Casub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Feniches[[i]] <- hypervolume_gaussian(Fesub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Kniches[[i]] <- hypervolume_gaussian(Ksub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Mgniches[[i]] <- hypervolume_gaussian(Mgsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Mnniches[[i]] <- hypervolume_gaussian(Mnsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Naniches[[i]] <- hypervolume_gaussian(Nasub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  Mositureniches[[i]] <- hypervolume_gaussian(Mosituresub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  FUniches[[i]] <- hypervolume_gaussian(FUsub, name = colnames(EMFra5)[i], weight = wtssub, samples.per.point = 1000)
+  
+  print(paste(i, "out of", ncol(EMFra5)))
+}
+
+
+# Set names for saved niche objects
+
+names(fullniches) <- colnames(EMFra5)
+
+names(abcondniches) <- colnames(EMFra5)
+names(abresniches) <- colnames(EMFra5)
+names(bicondniches) <- colnames(EMFra5)
+names(biresniches) <- colnames(EMFra5)
+
+names(pHniches) <- colnames(EMFra5)
+names(MAPniches) <- colnames(EMFra5)
+names(MATniches) <- colnames(EMFra5)
+names(Ts_10_7dniches) <- colnames(EMFra5)
+names(SM_10_7dniches) <- colnames(EMFra5)
+names(Ts_10_30dniches) <- colnames(EMFra5)
+names(SM_10_30dniches) <- colnames(EMFra5)
+names(Annual_soil_temp_10niches) <- colnames(EMFra5)
+names(Annual_soil_moisture_10niches) <- colnames(EMFra5)
+names(Nniches) <- colnames(EMFra5)
+names(Avail_Pniches) <- colnames(EMFra5)
+names(Caniches) <- colnames(EMFra5)
+names(Feniches) <- colnames(EMFra5)
+names(Kniches) <- colnames(EMFra5)
+names(Mgniches) <- colnames(EMFra5)
+names(Mnniches) <- colnames(EMFra5)
+names(Naniches) <- colnames(EMFra5)
+names(Mositureniches) <- colnames(EMFra5)
+names(FUniches) <- colnames(EMFra5)
+
+
+# If preferred, save data before proceeding to step 2
+save.image(file = "calculated_niches_EMF_control_Step1.RData")
+
+###############Step2_niche_overlap################################
+# If required load data from step 1
+# load("calculated_niches.RData")
+
+# Load required packages
+
+library(vegan)
+library(hypervolume)
+
+# Define function (gno) to calculate niche overlap between all pairs of taxa
+# Uses hypervolume::hypervolume_overlap_statistics to estimate overlap
+
+gno <- function(nobj){
+  fno <- data.frame(t(combn(colnames(EMFra5), 2)), jaccard = NA, sorensen = NA, frac_unique_1 = NA, frac_unique_2 = NA)
+  names(fno)[c(1, 2)] <- c("OTU1", "OTU2")
+  for (j in 1:nrow(fno)){
+    n1 <- nobj[[fno[j, 1]]]
+    n2 <- nobj[[fno[j, 2]]]
+    fno[j, 3:6] <- hypervolume_overlap_statistics(hypervolume_set(n1, n2, check.memory=F))
+    print(paste(j, "of", nrow(fno)))
+  }
+  return(fno)
+}
+
+# Use function to estimate overlaps for all niches (full/types/axes)
+# Takes hours/ days on laptop
+
+fullnicheover <- gno(fullniches)
+
+abcnicheover <- gno(abcondniches)
+abrnicheover <- gno(abresniches)
+bicnicheover <- gno(bicondniches)
+birnicheover <- gno(biresniches)
+
+pHnicheover <- gno(pHniches)
+MAPnicheover <- gno(MAPniches)
+MATnicheover <- gno(MATniches)
+Ts_10_7dnicheover <- gno(Ts_10_7dniches)
+SM_10_7dnicheover <- gno(SM_10_7dniches)
+Ts_10_30dnicheover <- gno(Ts_10_30dniches)
+SM_10_30dnicheover <- gno(SM_10_30dniches)
+Annual_soil_temp_10nicheover <- gno(Annual_soil_temp_10niches)
+Annual_soil_moisture_10nicheover<- gno(Annual_soil_moisture_10niches)
+Nnicheover <- gno(Nniches)
+Avail_Pnicheover <- gno(Avail_Pniches)
+Canicheover <- gno(Caniches)
+Fenicheover <- gno(Feniches)
+Knicheover <- gno(Kniches)
+Mgnicheover <- gno(Mgniches)
+Mnnicheover <- gno(Mnniches)
+Nanicheover <- gno(Naniches)
+Mositurenicheover <- gno(Mositureniches)
+FUnicheover <- gno(FUniches)
+
+
+# Define function (getpdist) to manipulate long format results to matrix
+# use Jaccard similarity but convert to dissimilarity (1-Jacc_sim)
+# Matrices of pairwise niche dissimilarities can then be used to estimate 
+# community-level characteristics e.g. mean pairwise distance
+
+getpdist <- function(over){
+  over$OTU1 <- factor(over$OTU1, levels = colnames(EMFra5))
+  over$OTU2 <- factor(over$OTU2, levels = colnames(EMFra5))
+  temp <- xtabs(jaccard ~ OTU1 + OTU2, data = over)
+  mat <- as.matrix(as.data.frame.matrix(temp))
+  mt <- mat[colnames(EMFra5), colnames(EMFra5)]
+  diag(mt) <- 1
+  mt <- 1-mt
+  distm <- as.dist(t(mt))
+  return(distm)
+}
+
+# Use function to generate matrices of pairwise niche differentiation 
+
+fulln_dist <- getpdist(fullnicheover)
+abc_dist <- getpdist(abcnicheover)
+abr_dist <- getpdist(abrnicheover)
+bic_dist <- getpdist(bicnicheover)
+bir_dist <- getpdist(birnicheover)
+pH_dist <- getpdist(pHnicheover)
+MAP_dist <- getpdist(MAPnicheover)
+MAT_dist <- getpdist(MATnicheover)
+Ts_10_7d_dist <- getpdist(Ts_10_7dnicheover)
+SM_10_7d_dist <- getpdist(SM_10_7dnicheover)
+Ts_10_30d_dist <- getpdist(Ts_10_30dnicheover)
+SM_10_30d_dist <- getpdist(SM_10_30dnicheover)
+Annual_soil_temp_10_dist <- getpdist(Annual_soil_temp_10nicheover)
+Annual_soil_moisture_10_dist <- getpdist(Annual_soil_moisture_10nicheover)
+N_dist <- getpdist(Nnicheover)
+Avail_P_dist <- getpdist(Avail_Pnicheover)
+Ca_dist <- getpdist(Canicheover)
+Fe_dist <- getpdist(Fenicheover)
+K_dist <- getpdist(Knicheover)
+Mg_dist <- getpdist(Mgnicheover)
+Mn_dist <- getpdist(Mnnicheover)
+Na_dist <- getpdist(Nanicheover)
+Mositure_dist <- getpdist(Mositurenicheover)
+FU_dist <- getpdist(FUnicheover)
+
+# If preferred, save data before proceeding to step 3
+save.image(file = "niche_differentiation_EMF_con_step2.RData")
+
+###########step3_generate_randomisations##################################
+# If preferred load data from step 1
+# Load("calculated_niches.RData") 
+
+# Load necessary package
+library(vegan)
+
+EMFraw5 <- EMF_raw[, colSums(decostand(EMF_raw, "pa")) > 4]
+
+outmats <- rep(list(EMFraw5), 499)
+
+stratification <- meta_emf$Region
+
+#### Or for biome stratification
+# stratification<-rep(NA, nrow(meta.shared))
+# stratification[meta_shared$Olson_BIOME_NAME %in% c("Deserts & Xeric Shrublands", "Flooded Grasslands & Savannas", "Temperate Grasslands,  Savannas & Shrublands", "Montane Grasslands & Shrublands")] <- "temperate_grassland"
+# stratification[meta_shared$Olson_BIOME_NAME %in% c("Boreal Forests/Taiga")] <- "boreal_forest"
+# stratification[meta_shared$Olson_BIOME_NAME %in% c("Mediterranean Forests, Woodlands & Scrub", "Temperate Broadleaf & Mixed Forests", "Temperate Conifer Forests")] <- "temperate_forest"
+# stratification[meta_shared$Olson_BIOME_NAME %in% c("Tundra")] <- "tundra"
+# stratification[meta_shared$Olson_BIOME_NAME %in% c("Tropical & Subtropical Coniferous Forests", "Tropical & Subtropical Dry Broadleaf Forests", "Tropical & Subtropical Moist Broadleaf Forests")] <- "tropical_forest"
+# stratification[meta_shared$Olson_BIOME_NAME %in% c("Tropical & Subtropical Grasslands, Savannas & Shrublands")] <- "tropical_grassland"
+
+
+for (j in 1:length(unique(stratification))){
+  realm.ind <- which(stratification == unique(stratification)[j])
+  rand.mat.j <- vegan:::permatswap(EMFraw5[realm.ind,], "quasiswap", times=499)
+  for (f in 1:length(outmats)) {outmats[[f]][realm.ind,] <- rand.mat.j$perm[[f]]}
+  print(j)
+}
+
+### Variance stabilising calculation
+
+library(phyloseq)
+library(DESeq2)
+
+gm_mean = function(x, na.rm = TRUE){
+  exp(sum(log(x[x > 0]), na.rm = na.rm) / length(x))
+}
+
+runVST = function(comm, t,removeneg=TRUE){
+  pla_phyloseq <- phyloseq(otu_table(comm, taxa_are_rows = FALSE), sample_data(t))
+  pla_deseq <- phyloseq_to_deseq2(pla_phyloseq, ~1) # convert to DESeq2 container
+  geoMeans = apply(counts(pla_deseq), 1, gm_mean)
+  pla_deseq = estimateSizeFactors(pla_deseq, geoMeans = geoMeans) 
+  pla_deseq = estimateDispersions(pla_deseq, fitType = "local")
+  pla_VST = getVarianceStabilizedData(pla_deseq)
+  if(removeneg) pla_VST[pla_VST < 0] <- 0 # equate negative values with 0 abundance
+  zerodat<-pla_VST
+  zerodat[zerodat < 0] <- 0
+  pla_VST2 <- pla_VST[(which(rowSums(zerodat) > 0)), ] # only keep taxa with >0 occurrence
+  pla_VST2 = t(pla_VST2) # transpose to our standard orientation (samples are rows)
+  return(pla_VST2)
+}
+
+#rownames(env) <- rownames(AMFraw5)
+
+randVST<-list()
+for (i in 1:length(outmats)){
+  randVST[[i]] <- runVST(outmats[[i]], meta_emf)
+  print(i)
+}
+
+rm(list = (ls()[!ls() %in% c("outmats", "randVST")]))
+
+#setwd("C:/Users/davison/Nextcloud/Botany/FungalNiche/raw_data")
+save.image(file = "randomised_data_EMF_con.RData")
+
+###########step4_mansuscript_ana;lyses_figures####################################
+## Load data from steps 2 and 3 if necessary
+
+# load("niche_differentiation.RData")
+# load("randomised_data_realm.RData")
+
+## Or load plotting data to explore plotting without going through steps 1-3
+
+# load("plottingdata.Rdata")
+
+# Load necessary packages 
+library(vegan)
+library(Hmisc)
+library(lme4)
+library(emmeans)
+library(multcomp)
+library(scales)
+EMFra5_matrix <- as.matrix(EMFra5)
+# Define function from Gerhold et al 2013 modifying mpd 
+# to remove dependency on species richness
+
+mpd.corrected = function(samp, dis, abundance.weighted = FALSE) {
+  N <- dim(samp)[1]
+  mpd <- numeric(N)
+  for (i in 1:N) {
+    sppInSample <- names(samp[i, samp[i, ] > 0])
+    if (length(sppInSample) > 1) {
+      sample.dis <- dis[sppInSample, sppInSample]
+      if (abundance.weighted) {
+        sample.weights <- t(as.matrix(samp[i, sppInSample, drop = FALSE])) %*% as.matrix(samp[i, sppInSample, drop = FALSE])
+        mpd[i] <- weighted.mean(sample.dis[lower.tri(sample.dis)], sample.weights[lower.tri(sample.weights)])
+      } else {
+        mpd[i] <- mean(sample.dis[lower.tri(sample.dis)])
+      }
+    } else {
+      mpd[i] <- NA
+    }
+  }
+  mpd
+}
+
+# Define function for calculating standardised effect size
+
+get.ses <- function(obs, rnd) {
+  rnd.mn <- apply(rnd, 2, mean, na.rm = TRUE)
+  rnd.sd <- apply(rnd, 2, sd, na.rm = TRUE)
+  return((obs - rnd.mn) / rnd.sd)
+}
+
+
+# Estimate observed mean pairwise niche differentiation
+
+fullov_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(fulln_dist), abundance.weighted=T)
+
+abcov_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(abc_dist), abundance.weighted=T)
+abrov_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(abr_dist), abundance.weighted=T)
+bicov_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(bic_dist), abundance.weighted=T)
+birov_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(bir_dist), abundance.weighted=T)
+
+pH_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(pH_dist), abundance.weighted=T)
+MAP_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(MAP_dist), abundance.weighted=T)
+MAT_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(MAT_dist), abundance.weighted=T)
+Ts_10_7d_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Ts_10_7d_dist), abundance.weighted = T)
+SM_10_7d_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(SM_10_7d_dist), abundance.weighted = T)
+Ts_10_30d_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Ts_10_30d_dist), abundance.weighted = T)
+SM_10_30d_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(SM_10_30d_dist), abundance.weighted = T)
+Annual_soil_temp_10_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Annual_soil_temp_10_dist), abundance.weighted = T)
+Annual_soil_moisture_10_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Annual_soil_moisture_10_dist), abundance.weighted = T)
+N_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(N_dist), abundance.weighted=T)
+Avail_P_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Avail_P_dist), abundance.weighted=T)
+Ca_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Ca_dist), abundance.weighted=T)
+Fe_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Fe_dist), abundance.weighted=T)
+K_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(K_dist), abundance.weighted=T)
+Mg_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Mg_dist), abundance.weighted=T)
+Mn_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Mn_dist), abundance.weighted=T)
+Na_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Na_dist), abundance.weighted=T)
+Mositure_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(Mositure_dist), abundance.weighted=T)
+FU_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(FU_dist), abundance.weighted=T)
+BR_cwm_corr <- mpd.corrected(EMFra5_matrix, as.matrix(bir_dist), abundance.weighted=T)
+
+# Estimate distribution of mean pairwise niche differentiation in randomised matrices
+rres_diff_full <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(fulln_dist), abundance.weighted=T)})
+rres_diff_full <- do.call(rbind, rres_diff_full)
+
+rres_diff_abc <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(abc_dist), abundance.weighted=T)})
+rres_diff_abc <- do.call(rbind, rres_diff_abc)
+
+rres_diff_abr <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(abr_dist), abundance.weighted=T)})
+rres_diff_abr <- do.call(rbind, rres_diff_abr)
+
+rres_diff_bic <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(bic_dist), abundance.weighted=T)})
+rres_diff_bic <- do.call(rbind, rres_diff_bic)
+
+rres_diff_bir <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(bir_dist), abundance.weighted=T)})
+rres_diff_bir <- do.call(rbind, rres_diff_bir)
+
+rres_diff_pH <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(pH_dist), abundance.weighted=T)})
+rres_diff_pH <- do.call(rbind, rres_diff_pH)
+
+rres_diff_MAP <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(MAP_dist), abundance.weighted=T)})
+rres_diff_MAP <- do.call(rbind, rres_diff_MAP)
+
+rres_diff_MAT <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(MAT_dist), abundance.weighted=T)})
+rres_diff_MAT <- do.call(rbind, rres_diff_MAT)
+
+rres_diff_Ts_10_7d <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Ts_10_7d_dist), abundance.weighted=T)})
+rres_diff_Ts_10_7d <- do.call(rbind, rres_diff_Ts_10_7d)
+
+rres_diff_SM_10_7d <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(SM_10_7d_dist), abundance.weighted=T)})
+rres_diff_SM_10_7d <- do.call(rbind, rres_diff_SM_10_7d)
+
+rres_diff_Ts_10_30d <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Ts_10_30d_dist), abundance.weighted=T)})
+rres_diff_Ts_10_30d <- do.call(rbind, rres_diff_Ts_10_30d)
+
+rres_diff_SM_10_30d <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(SM_10_30d_dist), abundance.weighted=T)})
+rres_diff_SM_10_30d <- do.call(rbind, rres_diff_SM_10_30d)
+
+rres_diff_Annual_soil_temp_10 <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Annual_soil_temp_10_dist), abundance.weighted=T)})
+rres_diff_Annual_soil_temp_10 <- do.call(rbind, rres_diff_Annual_soil_temp_10)
+
+rres_diff_Annual_soil_moisture_10 <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Annual_soil_moisture_10_dist), abundance.weighted=T)})
+rres_diff_Annual_soil_moisture_10 <- do.call(rbind, rres_diff_Annual_soil_moisture_10)
+
+rres_diff_N <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(N_dist), abundance.weighted=T)})
+rres_diff_N <- do.call(rbind, rres_diff_N)
+
+rres_diff_Avail_P <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Avail_P_dist), abundance.weighted=T)})
+rres_diff_Avail_P <- do.call(rbind, rres_diff_Avail_P)
+
+rres_diff_Ca <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Ca_dist), abundance.weighted=T)})
+rres_diff_Ca <- do.call(rbind, rres_diff_Ca)
+
+rres_diff_Fe <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Fe_dist), abundance.weighted=T)})
+rres_diff_Fe <- do.call(rbind, rres_diff_Fe)
+
+rres_diff_K <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(K_dist), abundance.weighted=T)})
+rres_diff_K <- do.call(rbind, rres_diff_K)
+
+rres_diff_Mg <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Mg_dist), abundance.weighted=T)})
+rres_diff_Mg <- do.call(rbind, rres_diff_Mg)
+
+rres_diff_Mn <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Mn_dist), abundance.weighted=T)})
+rres_diff_Mn <- do.call(rbind, rres_diff_Mn)
+
+rres_diff_Na <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Na_dist), abundance.weighted=T)})
+rres_diff_Na <- do.call(rbind, rres_diff_Na)
+
+rres_diff_Mositure <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(Mositure_dist), abundance.weighted=T)})
+rres_diff_Mositure <- do.call(rbind, rres_diff_Mositure)
+
+rres_diff_FU <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(FU_dist), abundance.weighted=T)})
+rres_diff_FU <- do.call(rbind, rres_diff_FU)
+
+rres_diff_BR <- lapply(randVST,FUN=function(e) {mpd.corrected(decostand(e, "total"), as.matrix(bir_dist), abundance.weighted=T)})
+rres_diff_BR <- do.call(rbind, rres_diff_BR)
+
+# Calculate standardised effect sizes
+
+full_diff_ses <- get.ses(obs = fullov_cwm_corr, rnd = rres_diff_full)
+
+abc_diff_ses <- get.ses(obs = abcov_cwm_corr, rnd = rres_diff_abc)
+abr_diff_ses <- get.ses(obs = abrov_cwm_corr, rnd = rres_diff_abr)
+bic_diff_ses <- get.ses(obs = bicov_cwm_corr, rnd = rres_diff_bic)
+bir_diff_ses <- get.ses(obs = birov_cwm_corr, rnd = rres_diff_bir)
+
+pH_diff_ses <- get.ses(obs = pH_cwm_corr, rnd = rres_diff_pH)
+MAP_diff_ses <- get.ses(obs = MAP_cwm_corr, rnd = rres_diff_MAP)
+MAT_diff_ses <- get.ses(obs = MAT_cwm_corr, rnd = rres_diff_MAT)
+Ts_10_7d_diff_ses <- get.ses(obs = Ts_10_7d_cwm_corr, rnd = rres_diff_Ts_10_7d)
+SM_10_7d_diff_ses <- get.ses(obs = SM_10_7d_cwm_corr, rnd = rres_diff_SM_10_7d)
+Ts_10_30d_diff_ses <- get.ses(obs = Ts_10_30d_cwm_corr, rnd = rres_diff_Ts_10_30d)
+SM_10_30d_diff_ses <- get.ses(obs = SM_10_30d_cwm_corr, rnd = rres_diff_SM_10_30d)
+Annual_soil_temp_10_diff_ses <- get.ses(obs = Annual_soil_temp_10_cwm_corr, rnd = rres_diff_Annual_soil_temp_10)
+Annual_soil_moisture_10_diff_ses <- get.ses(obs = Annual_soil_moisture_10_cwm_corr, rnd = rres_diff_Annual_soil_moisture_10)
+N_diff_ses <- get.ses(obs = N_cwm_corr, rnd = rres_diff_N)
+Avail_P_diff_ses <- get.ses(obs = Avail_P_cwm_corr, rnd = rres_diff_Avail_P)
+Ca_diff_ses <- get.ses(obs = Ca_cwm_corr, rnd = rres_diff_Ca)
+Fe_diff_ses <- get.ses(obs = Fe_cwm_corr, rnd = rres_diff_Fe)
+K_diff_ses <- get.ses(obs = K_cwm_corr, rnd = rres_diff_K)
+Mg_diff_ses <- get.ses(obs = Mg_cwm_corr, rnd = rres_diff_Mg)
+Mn_diff_ses <- get.ses(obs = Mn_cwm_corr, rnd = rres_diff_Mn)
+Na_diff_ses <- get.ses(obs = Na_cwm_corr, rnd = rres_diff_Na)
+Mositure_diff_ses <- get.ses(obs = Mositure_cwm_corr, rnd = rres_diff_Mositure)
+FU_diff_ses <- get.ses(obs = FU_cwm_corr, rnd = rres_diff_FU)
+BR_diff_ses <- get.ses(obs = birov_cwm_corr, rnd = rres_diff_bir)
+
+
+
+##############################
+############################## Analysis and Figures
+
+
+# Calculate Mantel correlation statistics
+
+obs<-list(fulln_dist, abc_dist, abr_dist, bic_dist, bir_dist, pH_dist, MAP_dist, MAT_dist, Ts_10_7d_dist, SM_10_7d_dist, Ts_10_30d_dist, SM_10_30d_dist, Annual_soil_temp_10_dist, Annual_soil_moisture_10_dist, 
+          N_dist, Avail_P_dist, Ca_dist, Fe_dist, K_dist, Mg_dist, Mn_dist, Na_dist, Mositure_dist, FU_dist, bir_dist)
+
+nms<-c("fulln_dist", "abc_dist", "abr_dist", "bic_dist", "bir_dist", "pH_dist", "MAP_dist", "MAT_dist", "Ts_10_7d_dist", "SM_10_7d_dist", "Ts_10_30d_dist", "SM_10_30d_dist", "Annual_soil_temp_10_dist", "Annual_soil_moisture_10_dist", 
+       "N_dist", "Avail_P_dist", "Ca_dist", "Fe_dist", "K_dist", "Mg_dist", "Mn_dist", "Na_dist", "Mositure_dist", "FU_dist", "bir_dist")
+
+rmat <- matrix(nrow = length(obs),ncol = length(obs))
+colnames(rmat) <- nms
+rownames(rmat) <- nms
+ps <- matrix(nrow = length(obs), ncol = length(obs))
+colnames(ps) <- nms
+rownames(ps) <- nms
+
+ind <- expand.grid(1:25, 1:25)
+
+# 5 minutes on a laptop
+
+#set.seed(123) 
+for (j in 1:nrow(ind)) {
+  mt <- mantel(obs[[ind[j, 1]]], obs[[ind[j, 2]]], permutations = 999)
+  rmat[ind[j, 1], ind[j,2]] <- mt$statistic
+  ps[ind[j, 1], ind[j, 2]]<-mt$signif
+}
+
+# Calculate Pearson correlation statistics
+
+rc <- rcorr(cbind(full_diff_ses, abc_diff_ses, abr_diff_ses, bic_diff_ses, bir_diff_ses, 
+                  pH_diff_ses, MAP_diff_ses, MAT_diff_ses, Ts_10_7d_diff_ses, SM_10_7d_diff_ses, Ts_10_30d_diff_ses, SM_10_30d_diff_ses,
+                  Annual_soil_temp_10_diff_ses, Annual_soil_moisture_10_diff_ses, N_diff_ses, Avail_P_diff_ses, Ca_diff_ses, Fe_diff_ses, 
+                  K_diff_ses, Mg_diff_ses, Mn_diff_ses, Na_diff_ses, Mositure_diff_ses, FU_diff_ses, BR_diff_ses))
+
+# Figure 1: Set device dimensions
+
+devh <- 6
+mars <- c(0.1, 1.25, 0.25, 0.05)# inches
+ncat <- c(5, 20)
+ind <- (devh - sum(mars[c(1, 3)])) / sum(ncat)
+tots <- sum(mars[c(1, 3)]) + (ncat * ind)
+
+# FIGURE 1: generate pdf
+
+pdf("Figure1_full_type_indiv_heatmaps.pdf", height = devh, width = 6, pointsize = 8)
+layout(matrix(1:4, ncol = 2, byrow = T), heights = tots)
+par(mai = mars)
+
+# panel 1
+
+mat<-rmat[1:5, 1:5]
+mat1 <- t(apply(mat, 2, rev))
+Ps <- ps[1:5, 1:5]
+ps1 <- t(apply(Ps, 2, rev))
+
+image(mat1, axes = FALSE, xlab = "", ylab = "", col = hcl.colors(20, "YlOrRd", rev = TRUE, alpha = 0.4), zlim = c(0, 1))
+abline(h = seq(0.125, 0.875, by=0.25),v = seq(0.125, 0.875, by = 0.25))
+
+axis(3, seq(0, 1, by = 0.25), c("FN", "AC", "AR", "BC", "BR"))
+axis(2, seq(0, 1, by = 0.25), rev(c("FN", "AC", "AR", "BC", "BR")), las = 1)
+box()
+	
+for (x in 1:ncol(mat)) {
+  for (y in 1:nrow(mat)) {
+    add <- ""
+    if(ps1[x, y] <= 0.001) {add <- "***"}
+    if(ps1[x, y] > 0.001 & ps1[x, y] <= 0.01) {add <- "**"}
+    if(ps1[x, y] > 0.01 & ps1[x, y] <= 0.05) {add <- "*"}
+    mat2<-apply(mat1, 1, FUN = sprintf, fmt = "%.2f")
+    mat2[mat2 == "1.00"] <- 1
+    text((x-1) / (ncol(mat) - 1), (y - 1) / (nrow(mat) - 1), paste(mat2[y, x], add, sep = ""))
+  }
+}
+
+
+par(xpd = NA)
+legend("topleft", bty = "n", inset = c(-0.2, -0.25), legend = "a)", cex = 1.5)
+par(xpd = F)
+
+# panel 2
+
+
+mat <- rc$r[1:5, 1:5]
+mat1 <- t(apply(mat, 2, rev))
+Ps <- rc$P[1:5, 1:5]
+Ps[is.na(Ps)]<-0
+ps1 <- t(apply(Ps, 2, rev))
+
+image(mat1, col = hcl.colors(20, "YlOrRd", rev = TRUE, alpha = 0.4), axes = FALSE, xlab = "", ylab = "", zlim = c(0, 1))
+
+abline(h = seq(0.125, 0.875, by = 0.25), v = seq(0.125, 0.875, by = 0.25))
+
+axis(3, seq(0, 1, by = 0.25),c("FN", "AC", "AR", "BC", "BR"))
+axis(2, seq(0, 1, by = 0.25),rev(c("FN", "AC", "AR", "BC", "BR")), las = 1)
+box()
+
+
+for (x in 1:ncol(mat)) {
+  for (y in 1:nrow(mat)) {
+    add <- ""
+    if(ps1[x, y] <= 0.001) {add <- "***"}
+    if(ps1[x, y] > 0.001 & ps1[x, y] <= 0.01) {add <- "**"}
+    if(ps1[x, y] > 0.01 & ps1[x, y] <= 0.05) {add <- "*"}
+    mat2<-apply(mat1, 1, FUN = sprintf, fmt = "%.2f")
+    mat2[mat2 == "1.00"] <- 1
+    text((x - 1) / (ncol(mat) - 1), (y - 1) / (nrow(mat) - 1), paste(mat2[y, x], add, sep = ""))
+  }
+}
+
+par(xpd = NA)
+legend("topleft", bty = "n", inset = c(-0.2, -0.25), legend = "b)", cex = 1.5)
+par(xpd = F)
+
+
+# panel 3
+
+ycoord <- seq(((1 / 19) / 2) - (1 / 19), (1 - ((1 / 19) / 2)) + (1 / 19), by = (1 / 19))
+xcoord <- seq(((1 / 4) / 2) - (1 / 4), (1 - ((1 / 4) / 2)) + (1 / 4), by = (1 / 4))
+
+mat <- rmat[6:25, 1:5]
+mat1 <- t(apply(mat, 2, rev))
+Ps <- ps[6:25, 1:5]
+ps1 <- t(apply(Ps, 2, rev))
+
+image(mat1, col = hcl.colors(20, "YlOrRd", rev = TRUE, alpha = 0.4), axes = FALSE, xlab = "", ylab = "", zlim = c(0, 1))
+
+abline(h = ycoord, v = xcoord)
+
+axis(2, seq(0, 1, by = 1 / 19), c("BR", "FU", "Mositure", "Na", "Mn", "Mg", "K", "Fe", "Ca", "Avail_P", "N", "Annual_soil_moisture_10", "Annual_soil_temp_10", "SM_10_30d", "Ts_10_30d", "SM_10_7d", "Ts_10_7d", "MAT", "MAP", "pH"), las = 2)
+box()
+
+
+for (x in 1:ncol(mat)) {
+  for (y in 1:nrow(mat)) {
+    add <- ""
+    if(ps1[x, y] <= 0.001) {add <- "***"}
+    if(ps1[x, y] > 0.001 & ps1[x, y] <= 0.01) {add <- "**"}
+    if(ps1[x, y] > 0.01 & ps1[x, y] <= 0.05) {add <- "*"}
+    mat2 <- apply(mat1, 1, FUN = sprintf,fmt = "%.2f")
+    mat2[mat2 == "1.00"] <- 1
+    text((x - 1) / (ncol(mat) - 1), (y - 1) / (nrow(mat) - 1), paste(mat2[y, x], add, sep = ""))
+  }
+}
+
+
+#lines(x = c(xcoord[c(2, 3, 3, 2, 2)]), y = ycoord[c(10, 10, 13, 13, 10)], col = "red", lwd = 2)
+#lines(x = c(xcoord[c(3, 4, 4, 3, 3)]), y = ycoord[c(5, 5, 10, 10, 5)], col = "red", lwd = 2)
+#lines(x = c(xcoord[c(4, 5, 5, 4, 4)]), y = ycoord[c(2, 2, 5, 5, 2)], col = "red", lwd = 2)
+#lines(x = c(xcoord[c(5, 6, 6, 5, 5)]), y = ycoord[c(1, 1, 2, 2, 1)], col = "red", lwd = 2)
+
+par(xpd = NA)
+legend("topleft", bty = "n", inset = c(-0.2, -0.07), legend = "c)", cex = 1.5)
+par(xpd = F)
+
+
+# panel 4
+
+mat <- rc$r[6:25, 1:5]
+mat1 <- t(apply(mat, 2, rev))
+Ps <- rc$P[6:25, 1:5]
+Ps[is.na(Ps)] <- 0
+ps1 <- t(apply(Ps, 2, rev))
+
+image(mat1, col = hcl.colors(20, "YlOrRd", rev = TRUE, alpha = 0.4), axes = FALSE, xlab = "", ylab = "", zlim = c(0,1))
+
+abline(h = ycoord, v = xcoord)
+
+axis(2, seq(0, 1, by = 1 / 19), c("BR", "FU", "Mositure", "Na", "Mn", "Mg", "K", "Fe", "Ca", "Avail_P", "N", "Annual_soil_moisture_10", "Annual_soil_temp_10", "SM_10_30d", "Ts_10_30d", "SM_10_7d", "Ts_10_7d", "MAT", "MAP", "pH"), las = 2)
+box()
+
+for (x in 1:ncol(mat)) {
+  for (y in 1:nrow(mat)) {
+    add <- ""
+    if(ps1[x, y] <= 0.001) {add <- "***"}
+    if(ps1[x, y] > 0.001 & ps1[x, y] <= 0.01) {add <- "**"}
+    if(ps1[x, y] > 0.01 & ps1[x, y] <= 0.05) {add <- "*"}
+    mat2 <- apply(mat1, 1, FUN = sprintf, fmt = "%.2f")
+    mat2[mat2 == "1.00"] <- 1
+    text((x - 1) / (ncol(mat) - 1), (y - 1) / (nrow(mat) - 1), paste(mat2[y, x], add, sep = ""))
+  }
+}
+
+#lines(x = c(xcoord[c(2, 3, 3, 2, 2)]), y = ycoord[c(10, 10, 13, 13, 10)], col = "red", lwd = 2)
+#lines(x = c(xcoord[c(3, 4, 4, 3, 3)]), y = ycoord[c(5, 5, 10, 10, 5)], col = "red", lwd = 2)
+#lines(x = c(xcoord[c(4, 5, 5, 4, 4)]), y = ycoord[c(2, 2, 5, 5, 2)], col = "red", lwd = 2)
+#lines(x = c(xcoord[c(5, 6, 6, 5, 5)]), y = ycoord[c(1, 1, 2, 2, 1)], col = "red", lwd = 2)
+
+par(xpd = NA)
+legend("topleft", bty = "n", inset = c(-0.2,-0.07), legend = "d)", cex = 1.5)
+par(xpd = F)
+
+dev.off()
+#####################################################################
+
+# FIGURE S1: generate pdf
+## 
+
+pdf("FigS1_indiv_heatmaps.pdf", height = 13, width = 25, pointsize = 10)
+
+layout(matrix(1:2, ncol = 2, byrow = TRUE))
+par(mai = c(1.5, 2.2, 2.2, 0.5), mgp = c(2.5, 0.7, 0))  # ??????????????????
+
+ycoord <- seq(((1 / 19) / 2) - (1 / 19), (1 - ((1 / 19) / 2)) + (1 / 19), by = (1 / 19))
+xcoord <- seq(((1 / 19) / 2) - (1 / 19), (1 - ((1 / 19) / 2)) + (1 / 19), by = (1 / 19))
+
+var_labels <- c("BR", "FU", "Mositure", "Na", "Mn", "Mg", "K", "Fe", "Ca", "Avail_P", "N",
+                "Annual_soil_moisture_10", "Annual_soil_temp_10", "SM_10_30d", "Ts_10_30d",
+                "SM_10_7d", "Ts_10_7d", "MAT", "MAP", "pH")
+
+### Panel 1
+mat <- rmat[6:25, 6:25]
+mat1 <- t(apply(mat, 2, rev))
+Ps <- ps[6:25, 6:25]
+ps1 <- t(apply(Ps, 2, rev))
+
+image(mat1, col = hcl.colors(20, "YlOrRd", rev = TRUE, alpha = 0.7),
+      axes = FALSE, xlab = "", ylab = "", zlim = c(0, 1))
+
+abline(h = ycoord, v = xcoord)
+axis(3, seq(0, 1, by = 1 / 19), rev(var_labels), cex.axis = 1.2, las = 2, tck = -0.01, font.axis = 2)  # ?????????????????????
+axis(2, seq(0, 1, by = 1 / 19), var_labels, las = 2, cex.axis = 1.2, hadj = 1, tck = -0.01, font.axis = 2)  # ?????????????????????
+box()
+
+mat2 <- apply(mat1, 1, FUN = sprintf, fmt = "%.2f")
+mat2[mat2 == "1.00"] <- 1
+
+for (x in 1:ncol(mat)) {
+  for (y in 1:nrow(mat)) {
+    add <- ""
+    if (ps1[x, y] <= 0.001) { add <- "***" }
+    else if (ps1[x, y] <= 0.01) { add <- "**" }
+    else if (ps1[x, y] <= 0.05) { add <- "*" }
+    
+    xpos <- (x - 1) / (ncol(mat) - 1)
+    ypos <- (y - 1) / (nrow(mat) - 1)
+    text(xpos, ypos - 0.007, mat2[y, x], cex = 1.2)  # ????????????
+    if (add != "") {
+      text(xpos, ypos + 0.007, add, cex = 1.4)  # ????????????
+    }
+  }
+}
+
+par(xpd = NA)
+legend("topleft", bty = "n", inset = c(-0.4, -0.4), legend = "a)", cex = 0.8)
+par(xpd = FALSE)
+
+### Panel 2
+mat <- rc$r[6:25, 6:25]
+mat1 <- t(apply(mat, 2, rev))
+Ps <- rc$P[6:25, 6:25]
+Ps[is.na(Ps)] <- 0
+ps1 <- t(apply(Ps, 2, rev))
+
+image(mat1, col = hcl.colors(20, "YlOrRd", rev = TRUE, alpha = 0.7),
+      axes = FALSE, xlab = "", ylab = "", zlim = c(0, 1))
+
+abline(h = ycoord, v = xcoord)
+axis(3, seq(0, 1, by = 1 / 19), rev(var_labels), cex.axis = 1.2, las = 2, tck = -0.01, font.axis = 2)
+axis(2, seq(0, 1, by = 1 / 19), var_labels, las = 2, cex.axis = 1.2, hadj = 1, tck = -0.01, font.axis = 2)
+box()
+
+mat2 <- apply(mat1, 1, FUN = sprintf, fmt = "%.2f")
+mat2[mat2 == "1.00"] <- 1
+
+for (x in 1:ncol(mat)) {
+  for (y in 1:nrow(mat)) {
+    add <- ""
+    if (ps1[x, y] <= 0.001) { add <- "***" }
+    else if (ps1[x, y] <= 0.01) { add <- "**" }
+    else if (ps1[x, y] <= 0.05) { add <- "*" }
+    
+    xpos <- (x - 1) / (ncol(mat) - 1)
+    ypos <- (y - 1) / (nrow(mat) - 1)
+    text(xpos, ypos - 0.007, mat2[y, x], cex = 1.2)
+    if (add != "") {
+      text(xpos, ypos + 0.007, add, cex = 1.4)
+    }
+  }
+}
+
+par(xpd = NA)
+legend("topleft", bty = "n", inset = c(-0.4, -0.4), legend = "b)", cex = 0.8)
+par(xpd = FALSE)
+
+dev.off()
+
+
+# Boxplots of ses values
+
+# Model differences between niche types and axes in mean pairwise niche differentiation
+
+# type model
+resp <- c(abc_diff_ses, abr_diff_ses, bic_diff_ses, bir_diff_ses)
+niche <- rep(c("abc", "abr", "bic", "bir"), each = length(bir_diff_ses))
+samp <- rep(rownames(EMFra5_matrix), 4)
+mod1 <- lmer(resp ~ niche + (1 | samp))
+cld(emmeans(mod1, list(pairwise ~ niche), adjust = "tukey"))
+
+# ABC ABR BIC BIR
+# "a" "b" "a" "c" 
+
+# axes model
+resp<-c(pH_diff_ses, MAP_diff_ses, MAT_diff_ses, Ts_10_7d_diff_ses, SM_10_7d_diff_ses, Ts_10_30d_diff_ses, SM_10_30d_diff_ses, Annual_soil_temp_10_diff_ses, Annual_soil_moisture_10_diff_ses,
+        N_diff_ses, Avail_P_diff_ses, Ca_diff_ses, Fe_diff_ses,K_diff_ses, Mg_diff_ses, Mn_diff_ses, Na_diff_ses, Mositure_diff_ses, FU_diff_ses, BR_diff_ses)
+niche <- rep(c("pH", "MAP", "MAT", "Ts_10_7d", "SM_10_7d", "Ts_10_30d", "SM_10_30d", "Annual_soil_temp_10", "Annual_soil_moisture_10", 
+               "N", "Avail_P", "Ca", "Fe", "K", "Mg", "Mn", "Na", "Mositure", "FU", "BR"), each = length(bir_diff_ses))
+samp <- rep(rownames(EMFra5_matrix), 20)
+mod1 <- lmer(resp ~ niche + (1 | samp))
+cld(emmeans(mod1, list(pairwise ~ niche), adjust = "tukey"))
+
+#  BR   Ca   FU    K  MAP  MAT   Mg   OC    P   pH   PL   PR 
+# "d" "cd"  "a"  "a" "cd"  "b" "bc"  "b"  "a"  "b"  "b" "bcd" 
+
+
+# Define colours for groups
+
+cols<-c("grey50", "cornflowerblue", "burlywood", "coral", "goldenrod1")
+cols1 <- alpha(cols, 0.5)
+
+
+# FIGURE 2: generate pdf
+
+pdf("Fig2_diffses_types.pdf", height = 2.5, width = 3, pointsize = 8)
+#set.seed(123)
+par(lwd = 0.5)
+par(mai = c(0.4, 0.6, 0.05, 0.05))
+boxplot(cbind(full_diff_ses,abc_diff_ses, abr_diff_ses, bic_diff_ses, bir_diff_ses), ylab = "Differentiation SES", names=c("FN", "AC", "AR", "BC", "BR"), col=cols1, ylim = c(-40, 15), lwd = 0.5, axes = F, outline = F)
+axis(1, lwd = 0.5, lwd.tick = 0.5, at = 1:5, label = c("FN", "AC", "AR", "BC", "BR"))
+axis(2, lwd = 0.5, lwd.tick = 0.5)
+box(lwd = 0.5)
+points(rep(c(1, 2, 3, 4, 5), each = length(full_diff_ses)) + runif(-0.2, 0.2, n = length(full_diff_ses) * 5),
+       cbind(full_diff_ses, abc_diff_ses,abr_diff_ses, bic_diff_ses, bir_diff_ses), pch = 16, cex = 0.3, col = alpha("black",0.5))
+text(2:5, 8.5, label = c("a", "a", "b", "b"), pos = 3)
+abline(v = 1.5, lty = 2)
+dev.off()
+
+# FIGURE 3: generate pdf
+
+pdf("Figx_diffses_inaxes.pdf", height = 5, width = 6, pointsize = 8)
+
+par(lwd = 0.5)
+par(mai = c(1.4, 0.6, 0.05, 0.05))
+
+boxplot(list(pH_diff_ses, MAP_diff_ses, MAT_diff_ses, Ts_10_7d_diff_ses, SM_10_7d_diff_ses,
+             Ts_10_30d_diff_ses, SM_10_30d_diff_ses, Annual_soil_temp_10_diff_ses,
+             Annual_soil_moisture_10_diff_ses, N_diff_ses, Avail_P_diff_ses, Ca_diff_ses,
+             Fe_diff_ses, K_diff_ses, Mg_diff_ses, Mn_diff_ses, Na_diff_ses,
+             Mositure_diff_ses, FU_diff_ses, BR_diff_ses),
+        ylab = "Differentiation SES",
+        col = rep(cols1[2:5], c(9, 9, 1, 1)),
+        ylim = c(-16, 15),
+        lwd = 0.5, axes = FALSE, outline = FALSE)
+
+axis(1.5, lwd = 0.5, lwd.tick = 0.5, at = 1:20,
+     labels = c("pH", "MAP", "MAT", "Ts_10_7d", "sm_10_7d", "Ts_10_30d", "sm_10_30d",
+                "Annual_soil_temp_10", "Annual_soil_moisture_10", "N", "Avail_P", "Ca", "Fe",
+                "K", "Mg", "Mn", "Na", "Mositure", "FU", "BR"),
+     las = 2, cex.axis = 0.9, font.axis =2)  
+
+axis(2, lwd = 0.5, lwd.tick = 0.5, font.axis =2)
+box(lwd = 0.5)
+
+points(rep(1:20, each = length(K_diff_ses)) + runif(length(K_diff_ses) * 20, -0.2, 0.2),
+       cbind(pH_diff_ses, MAP_diff_ses, MAT_diff_ses, Ts_10_7d_diff_ses, SM_10_7d_diff_ses,
+             Ts_10_30d_diff_ses, SM_10_30d_diff_ses, Annual_soil_temp_10_diff_ses,
+             Annual_soil_moisture_10_diff_ses, N_diff_ses, Avail_P_diff_ses, Ca_diff_ses,
+             Fe_diff_ses, K_diff_ses, Mg_diff_ses, Mn_diff_ses, Na_diff_ses,
+             Mositure_diff_ses, FU_diff_ses, BR_diff_ses),
+       pch = 16, cex = 0.3, col = alpha("black", 0.5))
+
+text(1:20, 12.5,
+     labels = c("ab", "abcd", "abc", "ab", "ab", "ab", "abc", "abcd", "abc",
+                "bcd", "cd", "abcd", "bcd", "abcd", "abcd", "d", "abcd", "bcd", "a", "abcd"),
+     pos = 3)
+
+abline(v = c(9.5, 18.5, 19.5), lty = 2)
+text(c(9, 18, 19, 20), -17, pos = 3, labels = c("AC", "AR", "BC", "BR"))
+
+dev.off()
+
+save.image(file = "Figure_EMF_CON_Step4.RData")
+
+
+##############################################################################################
+#########################################Niche_width########################################
+library(spaa)
+#############################################################################
+Data (EMF, SAP, PAT and MUL) separated from OTU dataset, based on the fungal type
+############################################################################
+# Niche width (Levins) for OTU tables using spaa
+# Input: CSV files with taxa/OTUs as rows and samples as columns
+# Output: niche width table saved as CSV for each input file
+#################################################EMF
+EMF <- read.csv("EMF.csv", row.names = 1)
+otu_mat <- as.matrix(EMF) 
+View(otu_mat)
+otu_niche_width <- niche.width(otu_mat, method = "levins")
+View(otu_niche_width)
+write.csv(otu_niche_width, file = "otu_niche_width_EMF.csv")
+
+############################################SAP
+SAP <- read.csv("SAP.csv", row.names = 1)
+View(SAP)
+otu_mat <- as.matrix(SAP) 
+View(otu_mat)
+otu_niche_width <- niche.width(otu_mat, method = "levins")
+View(otu_niche_width)
+write.csv(otu_niche_width, file = "otu_niche_width_SAP.csv")
+
+#####################################################PAT
+PAT <- read.csv("PAT.csv", row.names = 1)
+View(PAT)
+otu_mat <- as.matrix(PAT) 
+View(otu_mat)
+otu_niche_width <- niche.width(otu_mat, method = "levins")
+View(otu_niche_width)
+write.csv(otu_niche_width, file = "otu_niche_width_PAT.csv")
+
+######################################################MUL
+MUL <- read.csv("MUL.csv", row.names = 1)
+View(MUL)
+otu_mat <- as.matrix(MUL) 
+View(otu_mat)
+otu_niche_width <- niche.width(otu_mat, method = "levins")
+View(otu_niche_width)
+write.csv(otu_niche_width, file = "otu_niche_width_MUL.csv")
+
+#############################################################################################################
+########################################NMDS+PERMANOVA###############################################
+library(vegan)
+library(ggplot2)
+library(reshape2)
+library(tidyverse)
+
+####################################################
+## NMDS analysis (all samples)
+
+# Hellinger transformation
+otu_scaled <- decostand(otu, method = "hellinger")
+
+# Bray–Curtis distance
+otu_dist <- vegdist(otu_scaled, method = "bray")
+print(otu_dist)
+
+# NMDS
+nmds_result <- metaMDS(otu_dist, k = 2, trymax = 100)
+print(nmds_result)
+
+# Extract NMDS points
+nmds_points <- as.data.frame(nmds_result$points)
+nmds_points$SampleID <- rownames(nmds_points)
+nmds_points <- merge(
+  nmds_points,
+  group,
+  by.x = "SampleID",
+  by.y = "row.names"
+)
+
+View(nmds_points)
+
+# PERMANOVA
+permanova_result <- adonis2(otu_dist ~ Treatment, data = group, permutations = 999)
+print(permanova_result)
+
+# Homogeneity of dispersion
+dispersion_test <- betadisper(otu_dist, group$Treatment)
+print(dispersion_test)
+permutest(dispersion_test)
+
+# Colors
+color_01 <- c("#1597A5", "#7a5195", "#76b947", "#FFC24B", "#FEB3AE", "#FF5733")
+
+# Extract statistics
+nmds_stress <- round(nmds_result$stress, 3)
+r2_value <- round(permanova_result$R2[1], 3)
+p_value <- permanova_result$`Pr(>F)`[1]
+
+# Format p value
+p_text <- ifelse(
+  p_value < 0.001,
+  "p < 0.001",
+  paste("p =", round(p_value, 3))
+)
+
+# NMDS plot
+p2 <- ggplot(nmds_points, aes(x = MDS1, y = MDS2)) +
+  theme_bw() +
+  geom_point(aes(color = Treatment), size = 3) +
+  stat_ellipse(
+    geom = "polygon",
+    level = 0.95,
+    linetype = 2,
+    size = 0.5,
+    aes(color = Treatment, fill = Treatment),
+    alpha = 0.4
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", size = 1, color = "grey50") +
+  geom_hline(yintercept = 0, linetype = "dashed", size = 1, color = "grey50") +
+  scale_color_manual(values = color_01) +
+  scale_fill_manual(values = color_01) +
+  theme(
+    axis.title.x = element_text(size = 28, face = "bold"),
+    axis.title.y = element_text(size = 28, face = "bold"),
+    axis.text.x  = element_text(size = 28, face = "bold"),
+    axis.text.y  = element_text(size = 28, face = "bold"),
+    panel.border = element_rect(colour = "black", linewidth = 2, fill = NA),
+    panel.grid = element_blank(),
+    legend.title = element_text(size = 22, face = "bold"),
+    legend.text  = element_text(size = 20),
+    legend.key.size = unit(1.6, "lines"),
+    legend.spacing.y = unit(1, "lines")
+  ) +
+  annotate(
+    "text",
+    x = min(nmds_points$MDS1) * 0.99,
+    y = max(nmds_points$MDS2) * 0.99,
+    label = paste(
+      "Stress =", nmds_stress,
+      "\nR² =", r2_value,
+      "\n", p_text
+    ),
+    size = 8,
+    hjust = 0,
+    vjust = 1,
+    color = "black"
+  )
+
+print(p2)
+
+###########################################################################################################
+####################################################Volcano_plot##########################################
+# Load necessary libraries
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggrepel)
+library(patchwork)
+library(cowplot)
+library(ggpubr)
+
+# Step 1: Load ASV table, metadata, taxonomy
+otu <- read.csv("otu.csv", header = TRUE, row.names = 1, check.names = FALSE)
+metadata <- read.csv("meta.csv", header = TRUE, row.names = 1, check.names = FALSE)
+tax <- read.csv("tax.csv", header = TRUE, row.names = 1, check.names = FALSE)
+
+# Step 2: Ensure sample names match (IMPORTANT)
+common_samples <- intersect(colnames(otu), rownames(metadata))
+otu <- otu[, common_samples, drop = FALSE]
+metadata <- metadata[common_samples, , drop = FALSE]
+
+# Treatment as factor
+metadata$Treatment <- as.factor(metadata$Treatment)
+
+# Step 3: Create DESeq2 object
+dds <- DESeqDataSetFromMatrix(
+  countData = otu,
+  colData = metadata,
+  design = ~ Treatment
+)
+
+# Step 4: Pre-filtering and size factors
+dds <- dds[rowSums(counts(dds)) >= 10, ]
+dds <- estimateSizeFactors(dds, type = "poscounts")
+
+# Step 5: Run DESeq2
+dds <- DESeq(dds)
+
+# Step 6: Pairwise comparisons vs control
+treatments <- c("N_inorg", "N_org", "P_inorg", "P_org", "soil")
+res_list <- list()
+
+for (t in treatments) {
+  res <- results(
+    dds,
+    alpha = 0.05,
+    lfcThreshold = 1,
+    contrast = c("Treatment", t, "control")
+  )
+  res_df <- as.data.frame(res)
+  res_df$ASV <- rownames(res_df)
+  res_df$Treatment <- t
+  res_list[[t]] <- res_df
+}
+
+# Step 7: Combine all comparisons
+res_combined <- bind_rows(res_list)
+
+# Step 8: Add a "Control" panel as a neutral reference (optional)
+control_df <- data.frame(
+  ASV = unique(res_combined$ASV),
+  log2FoldChange = 0,
+  padj = 1,
+  Treatment = "Control"
+)
+res_combined <- bind_rows(res_combined, control_df)
+
+# Step 9: Export significant ASVs
+sig_asvs <- res_combined %>%
+  filter(!is.na(padj)) %>%
+  filter(padj < 0.01 & abs(log2FoldChange) > 2) %>%
+  arrange(padj)
+
+print(sig_asvs)
+write.csv(sig_asvs, "significant_ASVs_01.csv", row.names = FALSE)
+
+# =========================
+# Add fungal type to results and build the final patchwork figure
+# =========================
+
+# 1) Keep ONLY the Fungal_type column and add ASV as a column for joining
+tax_selected <- tax %>%
+  dplyr::select(Fungal_type) %>%
+  tibble::rownames_to_column("ASV")
+
+# 2) Join Fungal_type into res_combined
+res_combined <- res_combined %>%
+  left_join(tax_selected, by = "ASV")
+
+# 3) Create Color category:
+#    If significant -> Fungal_type
+#    Else -> Not Significant
+#    (If significant but Fungal_type is NA -> "NA")
+res_combined$Color <- ifelse(
+  !is.na(res_combined$padj) &
+    res_combined$padj < 0.01 &
+    abs(res_combined$log2FoldChange) > 2,
+  as.character(res_combined$Fungal_type),
+  "Not Significant"
+)
+res_combined$Color[is.na(res_combined$Fungal_type) &
+                     !is.na(res_combined$padj) &
+                     res_combined$padj < 0.01 &
+                     abs(res_combined$log2FoldChange) > 2] <- "NA"
+
+# 4) Set plotting order for legend
+fungal_levels <- c("AMF", "EMF", "PAT", "SAP", "Multitrophs", "other", "unknown", "Not Significant", "NA")
+res_combined$Color <- factor(res_combined$Color, levels = fungal_levels)
+
+# 5) Colors (edit if your Fungal_type levels differ)
+fungal_colors <- c(
+  "EMF" = "#E63946",
+  "SAP" = "blue",
+  "PAT" = "green",
+  "AMF" = "#FB9590",
+  "Multitrophs" = "#14919B",
+  "other" = "#F4A261",
+  "unknown" = "yellow",
+  "Not Significant" = "#B0BEC5",
+  "NA" = "grey50"
+)
+
+# 6) Remove Control for the final patchwork (legend-only panel will replace it)
+res_filtered <- subset(res_combined, Treatment != "Control")
+
+# 7) Use a shared y-axis limit
+max_y <- max(-log10(res_filtered$padj), na.rm = TRUE)
+
+# 8) Common theme
+common_theme <- theme_minimal(base_size = 14) +
+  theme(
+    strip.background = element_rect(fill = "lightgray", color = "black", linewidth = 1.2),
+    strip.text = element_text(color = "black", face = "bold", hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1.2),
+    axis.text = element_text(size = 12, face = "bold", color = "black"),
+    axis.title = element_text(size = 14, face = "bold", color = "black")
+  )
+
+# 9) Plot function (one treatment per panel; optional legend)
+make_plot <- function(treatment_name, show_legend = FALSE) {
+  df <- subset(res_filtered, Treatment == treatment_name)
+
+  ggplot(df, aes(x = log2FoldChange, y = -log10(padj), color = Color)) +
+    geom_point(alpha = 0.8, size = 4) +
+    scale_color_manual(values = fungal_colors, drop = FALSE) +
+    geom_hline(yintercept = -log10(0.01), linetype = "dashed", color = "blue") +
+    geom_text_repel(
+      data = subset(df, !is.na(padj) & padj < 0.01 & abs(log2FoldChange) > 2),
+      aes(label = ASV),
+      size = 3, color = "black", max.overlaps = 10
+    ) +
+    facet_wrap(~ Treatment) +
+    labs(x = "Log2 Fold Change", y = "-log10(FDR)", color = "Fungi Types") +
+    ylim(0, max_y) +
+    common_theme +
+    theme(legend.position = ifelse(show_legend, "right", "none"))
+}
+
+# 10) Build panels
+p1 <- make_plot("N_inorg")
+p2 <- make_plot("P_inorg")
+p3 <- make_plot("N_org")
+p4 <- make_plot("P_org")
+
+# Extract legend from soil plot
+p5_with_legend <- make_plot("soil", show_legend = TRUE)
+legend <- cowplot::get_legend(p5_with_legend)
+legend_plot <- ggpubr::as_ggplot(legend)
+
+# Soil plot without legend
+p5 <- make_plot("soil", show_legend = FALSE)
+
+# 11) Layout (legend in position C)
+layout_design <- "
+ABC
+DEF
+"
+
+final_plot <- p1 + p2 + legend_plot +
+  p3 + p4 + p5 +
+  plot_layout(
+    design = layout_design,
+    widths = c(1, 1, 1),
+    heights = c(1, 1)
+  )
+
+# 12) Show figure
+final_plot
+
+
+
+
