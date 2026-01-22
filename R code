@@ -1242,7 +1242,7 @@ nmds_points <- merge(
 )
 
 # PERMANOVA
-permanova_result <- adonis2(otu_dist ~ Treatment, data = group, permutations = 999)
+permanova_result <- adonis2(otu_dist ~ Treatment, data = group, permutations = 9999)
 print(permanova_result)
 
 # Homogeneity of dispersion
