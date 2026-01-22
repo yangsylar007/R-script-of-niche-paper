@@ -11,14 +11,14 @@ library(readr)
 EMF <- read.csv("EMF.csv",header = TRUE,row.names = 1)
 SAP <- read.csv("SAP.csv",header = TRUE,row.names = 1)
 PAT <- read.csv("PAT.csv",header = TRUE,row.names = 1)
-multitroph <- read.csv("MUL.csv",header = TRUE,row.names = 1)
+MUL <- read.csv("MUL.csv",header = TRUE,row.names = 1)
 View(SAP)
 library(iNEXT)
 result_EMF <- iNEXT(EMF, q = c(0, 1, 2), datatype = "abundance")
 result_SAP <- iNEXT(SAP, q = c(0, 1, 2), datatype = "abundance")
 result_PAT <- iNEXT(PAT, q = c(0, 1, 2), datatype = "abundance")
-result_multitroph <- iNEXT(MUL, q = c(0, 1, 2), datatype = "abundance")
-View(result_EMF$AsyEst)
+result_MUL <- iNEXT(MUL, q = c(0, 1, 2), datatype = "abundance")
+
 write.csv(result_EMF$AsyEst,"result_EMF.csv", row.names = T)
 write.csv(result_SAP$AsyEst,"result_SAP.csv", row.names = T)
 write.csv(result_MUL$AsyEst,"result_MUL.csv", row.names = T)
@@ -151,7 +151,7 @@ par(font = 1)
 #############################################################################
 #############################Niche_differentiation#################################
 ############################################################################
-###########EMF, SAP, PAT and MUL between treatments have the same methods, so just show one code (EMF in control group) here #######################################
+###########EMF, SAP, PAT and MUL at each treatment have the same methods, so just show one code (EMF in control group) here #######################################
 ##########################################################################
 ##############Normalized by resampling with replacement##########################
 library(readr)
@@ -226,8 +226,8 @@ write.csv(
 library(vegan)
 library(hypervolume)
 library(readr)
-# Load data containing EMF community data and meta data
-# meta data contains environmental data reflecting
+# Load data containing EMF community data and metadata
+# metadata contains environmental data reflecting
 # different niche axes and biogeographic realm/biome
 # distinctions used during randomisation.
 
@@ -792,8 +792,6 @@ FU_diff_ses <- get.ses(obs = FU_cwm_corr, rnd = rres_diff_FU)
 BR_diff_ses <- get.ses(obs = birov_cwm_corr, rnd = rres_diff_bir)
 
 
-
-##############################
 ############################## Analysis and Figures
 
 
@@ -1183,7 +1181,7 @@ save.image(file = "Figure_EMF_CON_Step4.RData")
 #########################################Niche_width########################################
 library(spaa)
 #############################################################################
-Data (EMF, SAP, PAT and MUL) separated from OTU dataset, based on the fungal type
+Data (EMF, SAP, PAT and MUL) extracted from the OTU dataset, based on the fungal type
 ############################################################################
 # Niche width (Levins) for OTU tables using spaa
 # Input: CSV files with taxa/OTUs as rows and samples as columns
@@ -1191,36 +1189,25 @@ Data (EMF, SAP, PAT and MUL) separated from OTU dataset, based on the fungal typ
 #################################################EMF
 EMF <- read.csv("EMF.csv", row.names = 1)
 otu_mat <- as.matrix(EMF) 
-View(otu_mat)
 otu_niche_width <- niche.width(otu_mat, method = "levins")
-View(otu_niche_width)
 write.csv(otu_niche_width, file = "otu_niche_width_EMF.csv")
 
 ############################################SAP
 SAP <- read.csv("SAP.csv", row.names = 1)
-View(SAP)
 otu_mat <- as.matrix(SAP) 
-View(otu_mat)
 otu_niche_width <- niche.width(otu_mat, method = "levins")
-View(otu_niche_width)
 write.csv(otu_niche_width, file = "otu_niche_width_SAP.csv")
 
 #####################################################PAT
 PAT <- read.csv("PAT.csv", row.names = 1)
-View(PAT)
 otu_mat <- as.matrix(PAT) 
-View(otu_mat)
 otu_niche_width <- niche.width(otu_mat, method = "levins")
-View(otu_niche_width)
 write.csv(otu_niche_width, file = "otu_niche_width_PAT.csv")
 
 ######################################################MUL
 MUL <- read.csv("MUL.csv", row.names = 1)
-View(MUL)
 otu_mat <- as.matrix(MUL) 
-View(otu_mat)
 otu_niche_width <- niche.width(otu_mat, method = "levins")
-View(otu_niche_width)
 write.csv(otu_niche_width, file = "otu_niche_width_MUL.csv")
 
 #############################################################################################################
@@ -1253,8 +1240,6 @@ nmds_points <- merge(
   by.x = "SampleID",
   by.y = "row.names"
 )
-
-View(nmds_points)
 
 # PERMANOVA
 permanova_result <- adonis2(otu_dist ~ Treatment, data = group, permutations = 999)
@@ -1441,7 +1426,7 @@ fungal_colors <- c(
   "SAP" = "blue",
   "PAT" = "green",
   "AMF" = "#FB9590",
-  "Multitrophs" = "#14919B",
+  "MUL" = "#14919B",
   "other" = "#F4A261",
   "unknown" = "yellow",
   "Not Significant" = "#B0BEC5",
